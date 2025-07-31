@@ -5,7 +5,10 @@ const path = require("path");
 const { spawn } = require("child_process");
 
 const app = express();
-const PORT = 3000; // Server port
+const PORT = 3000;
+
+// Change this to your server's public IP or domain
+const PUBLIC_HOST = "http://52.204.152.24:" + PORT;
 
 // Directories
 const uploadsDir = "temp_uploads";
@@ -17,34 +20,25 @@ const htmlReportDir = "backstop_data/html_report";
 const upload = multer({ dest: uploadsDir });
 
 // Ensure directories exist
-[
-  "backstop_data",
-  uploadsDir,
-  referenceDir,
-  testDir,
-  diffImagesDir,
-  htmlReportDir,
-].forEach((dir) => {
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
-    console.log(`Created directory: ${dir}`);
-  }
+["backstop_data", uploadsDir, referenceDir, testDir, diffImagesDir, htmlReportDir].forEach((dir) => {
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 });
 
-// Serve diff images statically for real-time access
-app.use("/diff_images", express.static(path.join(__dirname, diffImagesDir)));
+// Serve diff images publicly
+app.use('/diff_images', express.static(diffImagesDir));
 
+// Store uploaded images
 const uploadedImages = new Map();
 
 // Create BackstopJS config
 function createBackstopConfig(testCases) {
-  const scenarios = testCases.map((testCase) => ({
+  const scenarios = testCases.map(testCase => ({
     label: testCase,
     url: `http://127.0.0.1:${PORT}/serve-image/${testCase}`,
     selectors: ["body"],
     misMatchThreshold: 0.1,
     requireSameDimensions: false,
-    delay: 1000,
+    delay: 1000
   }));
 
   return {
@@ -55,24 +49,24 @@ function createBackstopConfig(testCases) {
       bitmaps_reference: referenceDir,
       bitmaps_test: testDir,
       html_report: htmlReportDir,
-      ci_report: "backstop_data/ci_report",
+      ci_report: "backstop_data/ci_report"
     },
     report: ["CI"],
     engine: "puppeteer",
     engineOptions: {
-      args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
+      args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
     },
     asyncCaptureLimit: 1,
-    asyncCompareLimit: 1,
+    asyncCompareLimit: 1
   };
 }
 
-// Serve uploaded images (reference/current)
+// Serve uploaded images
 app.get("/serve-image/:testCase", (req, res) => {
   const { testCase } = req.params;
   const { mode } = req.query;
 
-  let imageKey = mode === "reference" ? `${testCase}_reference` : `${testCase}_current`;
+  let imageKey = mode === 'reference' ? `${testCase}_reference` : `${testCase}_current`;
   let imageData = uploadedImages.get(imageKey);
 
   if (!imageData && !mode) {
@@ -85,8 +79,8 @@ app.get("/serve-image/:testCase", (req, res) => {
   }
 
   const imageBuffer = fs.readFileSync(imageData.path);
-  const imageBase64 = imageBuffer.toString("base64");
-  const mimeType = imageData.mimetype || "image/png";
+  const imageBase64 = imageBuffer.toString('base64');
+  const mimeType = imageData.mimetype || 'image/png';
 
   res.send(`
     <!DOCTYPE html>
@@ -104,125 +98,72 @@ app.get("/serve-image/:testCase", (req, res) => {
   `);
 });
 
-// Update BackstopJS config JSON file
+// Update BackstopJS config
 function updateBackstopConfig(testCases) {
   const config = createBackstopConfig(testCases);
   fs.writeFileSync("backstop.selenium.json", JSON.stringify(config, null, 2));
 }
 
-// Run BackstopJS command with shell:true for Windows
+// Run BackstopJS command
 async function runBackstopCommand(command, testCase) {
   return new Promise((resolve, reject) => {
-    const args = ["backstop", command, "--config=backstop.selenium.json", `--filter=${testCase}`];
-    const child = spawn("npx", args, { shell: true });
+    const args = ['backstop', command, '--config=backstop.selenium.json', `--filter=${testCase}`];
+    const child = spawn('npx', args);
 
-    let stdout = "";
-    let stderr = "";
+    let stdout = '';
+    let stderr = '';
 
-    child.stdout.on("data", (data) => (stdout += data.toString()));
-    child.stderr.on("data", (data) => (stderr += data.toString()));
+    child.stdout.on('data', (data) => stdout += data.toString());
+    child.stderr.on('data', (data) => stderr += data.toString());
 
-    child.on("close", (code) => {
-      console.log(`BackstopJS process exited with code ${code}`);
-      console.log("Backstop stdout:", stdout);
-      console.log("Backstop stderr:", stderr);
-
-      if (code === 0 || (command === "test" && stdout.includes("report"))) {
-        resolve({ success: true, hasDifferences: code !== 0, stdout, stderr });
-      } else {
-        reject(new Error(`BackstopJS failed with code ${code}: ${stderr}`));
-      }
+    child.on('close', (code) => {
+      resolve({ success: code === 0, hasDifferences: code !== 0, stdout, stderr });
     });
 
-    child.on("error", (err) => {
-      console.error("BackstopJS spawn error:", err);
-      reject(err);
-    });
+    child.on('error', reject);
   });
 }
 
-// Find and copy diff image, return local path + base64 + public URL
+// Find and copy diff image
 function findAndCopyDiffImage(testCase) {
-  try {
-    if (!fs.existsSync(testDir)) return { found: false };
-
-    // Recursive function to get all files under a directory
-    function getAllFiles(dirPath, arrayOfFiles) {
-      files = fs.readdirSync(dirPath);
-
-      arrayOfFiles = arrayOfFiles || [];
-
-      files.forEach(function (file) {
-        const fullPath = path.join(dirPath, file);
-        if (fs.statSync(fullPath).isDirectory()) {
-          arrayOfFiles = getAllFiles(fullPath, arrayOfFiles);
-        } else {
-          arrayOfFiles.push(fullPath);
+  function findRecursively(dir) {
+    const items = fs.readdirSync(dir);
+    for (const item of items) {
+      const fullPath = path.join(dir, item);
+      if (fs.statSync(fullPath).isDirectory()) {
+        const found = findRecursively(fullPath);
+        if (found) return found;
+      } else {
+        const name = path.basename(fullPath).toLowerCase();
+        if (name.includes(testCase.toLowerCase()) && name.includes('diff') && name.endsWith('.png')) {
+          return fullPath;
         }
-      });
-
-      return arrayOfFiles;
-    }
-
-    const allFiles = getAllFiles(testDir);
-
-    console.log("All files in testDir (recursive):", allFiles);
-
-    // Loosened filename matching to find any diff or failed PNG
-    const diffFile = allFiles.find((filePath) => {
-      const name = path.basename(filePath).toLowerCase();
-      return (name.includes("diff") || name.includes("failed")) && name.endsWith(".png");
-    });
-
-    if (diffFile) {
-      if (!fs.existsSync(diffImagesDir)) {
-        fs.mkdirSync(diffImagesDir, { recursive: true });
-        console.log("Created diffImagesDir");
       }
-
-      const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-      const destPath = path.join(diffImagesDir, `${testCase}_${timestamp}_diff.png`);
-
-      fs.copyFileSync(diffFile, destPath);
-
-      const diffBase64 = fs.readFileSync(destPath).toString("base64");
-
-      console.log("Diff image found and copied:", destPath);
-
-      return {
-        found: true,
-        path: destPath,
-        base64: diffBase64,
-        url: `http://localhost:${PORT}/diff_images/${path.basename(destPath)}`,
-      };
     }
-
-    console.log("No diff image found.");
-    return { found: false };
-  } catch (error) {
-    console.error("Error finding diff image:", error);
-    return { found: false, error: error.message };
+    return null;
   }
+
+  const diffFile = findRecursively(testDir);
+  if (diffFile) {
+    const destFileName = `${testCase}_${new Date().toISOString().replace(/[:.]/g, '-')}_diff.png`;
+    const destPath = path.join(diffImagesDir, destFileName);
+    fs.copyFileSync(diffFile, destPath);
+    return { found: true, url: `${PUBLIC_HOST}/diff_images/${destFileName}` };
+  }
+  return { found: false };
 }
 
-
-// Main API endpoint for BackstopJS
+// Main BackstopJS endpoint
 app.post("/backstop", upload.single("image"), async (req, res) => {
   const { testCase, mode } = req.body;
   const uploadedFile = req.file;
 
   if (!testCase || !mode || !uploadedFile) {
-    return res.status(400).json({
-      success: false,
-      message: "Missing required parameters: testCase, mode, and image file",
-    });
+    return res.status(400).json({ success: false, message: "Missing required parameters" });
   }
 
   if (!["reference", "current"].includes(mode)) {
-    return res.status(400).json({
-      success: false,
-      message: "Mode must be 'reference' or 'current'",
-    });
+    return res.status(400).json({ success: false, message: "Mode must be 'reference' or 'current'" });
   }
 
   try {
@@ -230,62 +171,48 @@ app.post("/backstop", upload.single("image"), async (req, res) => {
     uploadedImages.set(imageKey, {
       path: uploadedFile.path,
       mimetype: uploadedFile.mimetype,
-      originalname: uploadedFile.originalname,
+      originalname: uploadedFile.originalname
     });
 
+    // Reference Mode
     if (mode === "reference") {
       updateBackstopConfig([testCase]);
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      await new Promise(resolve => setTimeout(resolve, 500));
+      await runBackstopCommand('reference', testCase);
 
-      await runBackstopCommand("reference", testCase);
-
-      return res.json({
-        success: true,
-        message: `Reference screenshot captured for: ${testCase}`,
-      });
+      return res.json({ success: true, message: `Reference screenshot captured for: ${testCase}` });
     }
 
-    if (mode === "current") {
-      const referenceKey = `${testCase}_reference`;
-      if (!uploadedImages.has(referenceKey)) {
-        return res.status(400).json({
-          success: false,
-          message: `No reference image found for test case: ${testCase}. Please upload reference image first.`,
-        });
-      }
+    // Current Mode (Test)
+    const referenceKey = `${testCase}_reference`;
+    if (!uploadedImages.has(referenceKey)) {
+      return res.status(400).json({ success: false, message: "Upload reference image first" });
+    }
 
-      updateBackstopConfig([testCase]);
-      await new Promise((resolve) => setTimeout(resolve, 500));
+    updateBackstopConfig([testCase]);
+    await new Promise(resolve => setTimeout(resolve, 500));
 
-      const result = await runBackstopCommand("test", testCase);
-      console.log("Backstop test result:", result);
+    const result = await runBackstopCommand('test', testCase);
+    const backstopResult = result.hasDifferences ? "failed" : "passed";
 
+    const response = {
+      success: true,
+      testCase,
+      result: backstopResult,
+      message: backstopResult === "passed" ? "No visual differences detected" : "Visual differences found"
+    };
+
+    if (backstopResult === "failed") {
       const diffInfo = findAndCopyDiffImage(testCase);
-      console.log("Diff info found:", diffInfo);
-
-      const response = {
-        success: true,
-        testCase,
-        result: result.hasDifferences ? "failed" : "passed",
-        message: result.hasDifferences ? "Visual differences found" : "No visual differences detected",
-      };
-
       if (diffInfo.found) {
-        response.diffImagePath = diffInfo.path;
-        response.diffImageUrl = diffInfo.url;
-        response.diffImageBase64 = diffInfo.base64;
-      } else {
-        console.log("No diff image found by findAndCopyDiffImage.");
+        response.diffImage = diffInfo.url;
       }
-
-      return res.json(response);
     }
+
+    return res.json(response);
+
   } catch (error) {
-    console.error("Error in /backstop:", error);
-    return res.status(500).json({
-      success: false,
-      error: error.message,
-    });
+    return res.status(500).json({ success: false, error: error.message });
   }
 });
 
