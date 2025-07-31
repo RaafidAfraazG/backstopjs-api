@@ -1,5 +1,14 @@
+# Node modules
+node_modules/
 
-node_modules
-temp_uploads
-backstop_data
-diff_images
+# Temp uploads and diff images
+temp_uploads/
+diff_images/
+
+# Auto-generated BackstopJS data
+backstop_data/
+backstop.selenium.json
+
+# Test images (local only)
+reference.png
+test.png
